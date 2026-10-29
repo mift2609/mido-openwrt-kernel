@@ -10,6 +10,10 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 [ -e /dev/console ] || /bin/busybox mknod /dev/console c 5 1 2>/dev/null
 /bin/busybox mount -t tmpfs tmpfs /tmp 2>/dev/null
 /bin/busybox mount -t tmpfs tmpfs /run 2>/dev/null
+# telnetd/ssh need PTYs
+/bin/busybox mkdir -p /dev/pts 2>/dev/null
+/bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null
+[ -e /dev/ptmx ] || /bin/busybox mknod /dev/ptmx c 5 2 2>/dev/null
 
 # echo to every available sink, ignore failures
 log() {

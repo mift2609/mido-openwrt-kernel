@@ -137,19 +137,25 @@ jobs:
         run: |
           set -e
           OUT="$GITHUB_WORKSPACE/out"
-          # NOTE: do NOT ship host (x86_64) dropbear into an arm64 initramfs.
-          # initramfs provides telnetd only; real dropbear comes from the OpenWrt rootfs.
-          sudo apt-get install -y -qq --no-install-recommends busybox-static
-          mkdir -p initrd/{bin,sbin,usr/bin,usr/sbin,etc,proc,sys,dev,tmp,run,lib}
-          cp /bin/busybox initrd/bin/busybox
+          # CRITICAL: the runner is x86_64 — a host busybox/dropbear in this initramfs
+          # cannot execute on arm64 and panics the kernel. Use Alpine's aarch64 static busybox.
+          BB_URL=$(curl -s https://dl-cdn.alpinelinux.org/alpine/v3.20/main/aarch64/ \
+                   | grep -oE 'busybox-static-[0-9.r-]+\.apk' | tail -1)
+          curl -sSL -o /tmp/bb.apk "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/aarch64/${BB_URL}"
+          mkdir -p /tmp/bbx && tar -xzf /tmp/bb.apk -C /tmp/bbx 2>/dev/null || true
+          file /tmp/bbx/bin/busybox.static
+          /tmp/bbx/bin/busybox.static 2>/dev/null | head -1 || true
+
+          mkdir -p initrd/{bin,sbin,etc,proc,sys,dev/pts,tmp,run,usr/bin,usr/sbin}
+          cp /tmp/bbx/bin/busybox.static initrd/bin/busybox
+          chmod +x initrd/bin/busybox
           for a in sh ls cat mount umount ip ifconfig sleep echo mkdir mknod telnetd \
-                   cut head tail grep ps kill; do ln -sf busybox "initrd/bin/$a"; done
+                   cut head tail grep ps kill ash; do ln -sf busybox "initrd/bin/$a"; done
           ln -sf ../bin/busybox initrd/sbin/ip
           cp .github/init initrd/init
-          chmod +x initrd/init initrd/bin/busybox
+          chmod +x initrd/init
           ( cd initrd && find . | cpio -o -H newc --quiet | gzip -9 ) > "$OUT/initramfs.cpio.gz"
           ls -lh "$OUT/initramfs.cpio.gz"
-          file initrd/bin/busybox
 
       - name: Make boot.img
         run: |
