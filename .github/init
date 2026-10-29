@@ -1,0 +1,97 @@
+#!/bin/busybox sh
+# mido (Redmi Note 4 / MSM8953) early-initramfs
+# Goal: USB RNDIS up at 192.168.1.1 + telnet + dropbear, survive everything.
+# HARD RULE: never `exec >/dev/...` — a missing console kills init before USB.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+/bin/busybox mount -t proc proc /proc 2>/dev/null
+/bin/busybox mount -t sysfs sysfs /sys 2>/dev/null
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
+[ -e /dev/console ] || /bin/busybox mknod /dev/console c 5 1 2>/dev/null
+/bin/busybox mount -t tmpfs tmpfs /tmp 2>/dev/null
+/bin/busybox mount -t tmpfs tmpfs /run 2>/dev/null
+
+# echo to every available sink, ignore failures
+log() {
+  echo "$*"
+  echo "$*" > /dev/kmsg 2>/dev/null
+  [ -w /dev/console ] && echo "$*" > /dev/console 2>/dev/null
+  return 0
+}
+
+log "mido-initramfs: start"
+
+# --- previous-crash dump (ramoops) ---
+if [ -r /sys/fs/pstore/console-ramoops-0 ]; then
+  log "=== PSTORE (previous boot) ==="
+  tail -c 4000 /sys/fs/pstore/console-ramoops-0 2>/dev/null
+  log "=== END PSTORE ==="
+fi
+
+# --- USB gadget: RNDIS first, before anything slow ---
+/bin/busybox mount -t configfs none /sys/kernel/config 2>/dev/null
+G=/sys/kernel/config/usb_gadget/mido
+if [ -d /sys/kernel/config ] && /bin/busybox mkdir -p "$G" 2>/dev/null; then
+  cd "$G" || cd /
+  echo 0x1d6b > idVendor   2>/dev/null
+  echo 0x2742 > idProduct  2>/dev/null
+  echo 0x0100 > bcdDevice  2>/dev/null
+  echo 0x0200 > bcdUSB     2>/dev/null
+  /bin/busybox mkdir -p strings/0x409 2>/dev/null
+  echo "mido0001"            > strings/0x409/serialnumber 2>/dev/null
+  echo "Xiaomi"              > strings/0x409/manufacturer 2>/dev/null
+  echo "Redmi Note 4 OpenWrt" > strings/0x409/product    2>/dev/null
+  /bin/busybox mkdir -p configs/c.1/strings/0x409 2>/dev/null
+  echo "RNDIS"  > configs/c.1/strings/0x409/configuration 2>/dev/null
+  echo 500      > configs/c.1/MaxPower 2>/dev/null
+  /bin/busybox mkdir -p functions/rndis.usb0 2>/dev/null
+  echo "12:00:00:00:00:01" > functions/rndis.usb0/dev_addr  2>/dev/null
+  echo "12:00:00:00:00:02" > functions/rndis.usb0/host_addr 2>/dev/null
+  /bin/busybox ln -sf functions/rndis.usb0 configs/c.1/ 2>/dev/null
+  UDC=$(/bin/busybox ls /sys/class/udc 2>/dev/null | head -n1)
+  if [ -n "$UDC" ]; then
+    echo "$UDC" > UDC 2>/dev/null && log "gadget bound: $UDC"
+  else
+    log "WARN: no UDC yet"
+  fi
+  cd /
+else
+  log "WARN: configfs/usb_gadget unavailable"
+fi
+
+# --- network config ---
+NETIF=""
+i=0
+while [ $i -lt 60 ]; do
+  for c in usb0 rndis0 eth0; do
+    [ -e "/sys/class/net/$c" ] && NETIF="$c" && break
+  done
+  [ -n "$NETIF" ] && break
+  i=$((i+1)); /bin/busybox sleep 0.2
+done
+
+if [ -n "$NETIF" ]; then
+  /bin/busybox ip link set "$NETIF" up 2>/dev/null
+  /bin/busybox ip addr add 192.168.1.1/24 dev "$NETIF" 2>/dev/null \
+    || /bin/busybox ifconfig "$NETIF" 192.168.1.1 netmask 255.255.255.0 up 2>/dev/null
+  log "net: $NETIF up -> 192.168.1.1/24"
+else
+  log "WARN: no network interface found"
+fi
+
+# --- services ---
+/bin/busybox telnetd -p 23 -l /bin/sh 2>/dev/null && log "telnetd :23 up"
+if [ -x /usr/sbin/dropbear ] && [ -f /etc/dropbear/dropbear_rsa_host_key ]; then
+  /usr/sbin/dropbear -R -B -p 22 -r /etc/dropbear/dropbear_rsa_host_key 2>/dev/null \
+    && log "dropbear :22 up"
+fi
+
+log "READY: telnet 192.168.1.1:23 | ssh 192.168.1.1:22"
+
+# keep PID 1 alive, heartbeat to kmsg so we can see liveness from host
+n=0
+while :; do
+  /bin/busybox sleep 30
+  n=$((n+1))
+  echo "mido heartbeat ${n} uptime=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)s" > /dev/kmsg 2>/dev/null
+done

@@ -1,0 +1,7 @@
+out/
+modroot/
+src/
+*.img
+*.tar.gz
+*.cpio.gz
+backup/

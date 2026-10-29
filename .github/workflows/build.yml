@@ -1,0 +1,181 @@
+name: Build mido kernel (MSM8953 / Redmi Note 4)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_tag:
+        description: 'msm8953-mainline/linux tag'
+        default: 'v6.12.0-r2'
+        required: true
+      upload_rootfs:
+        description: 'Also download OpenWrt armsr rootfs into artifact'
+        type: boolean
+        default: true
+
+env:
+  KERNEL_TAG: ${{ inputs.kernel_tag }}
+  KERNEL_REPO: msm8953-mainline/linux
+  PMOS_CONFIG_URL: https://gitlab.com/postmarketOS/pmaports/-/raw/master/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+  DTB: msm8953-xiaomi-mido.dtb
+  OPENWRT_URL: https://downloads.openwrt.org/releases/23.05.5/targets/armsr/armv8/openwrt-23.05.5-armsr-armv8-rootfs.tar.gz
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            device-tree-compiler ccache cpio xz-utils rsync \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          aarch64-linux-gnu-gcc --version | head -1
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-${{ env.KERNEL_TAG }}
+          max-size: 2G
+
+      - name: Fetch kernel source
+        run: |
+          set -e
+          curl -sSL -o k.tar.gz "https://github.com/${KERNEL_REPO}/archive/refs/tags/${KERNEL_TAG}.tar.gz"
+          mkdir -p src && tar -xzf k.tar.gz -C src --strip-components=1
+          rm k.tar.gz
+          echo "KDIR=$PWD/src" >> "$GITHUB_ENV"
+          ls "$PWD/src/arch/arm64/boot/dts/qcom/${DTB%%-*}-xiaomi-mido.dts"
+
+      - name: Fetch pmOS msm8953 config
+        run: |
+          set -e
+          cd "$KDIR"
+          curl -sSL -o .config "${PMOS_CONFIG_URL}"
+          echo "config lines: $(wc -l < .config)"
+
+      - name: Enable OpenWrt hotspot options
+        run: |
+          set -e
+          cd "$KDIR"
+          export PATH="/usr/lib/ccache:$PATH"
+          S=scripts/config
+          # filesystems
+          $S -e SQUASHFS -e SQUASHFS_XZ -e SQUASHFS_LZO -e SQUASHFS_LZ4 -e SQUASHFS_ZSTD
+          $S -e OVERLAY_FS -e EXT4_FS -e EXT4_FS_POSIX_ACL -e F2FS_FS
+          $S -e TMPFS -e DEVTMPFS -e DEVTMPFS_MOUNT -e PROC_FS -e SYSFS
+          # net core
+          $S -e BRIDGE -e VETH -e TUN -e NETFILTER -e NETFILTER_ADVANCED
+          $S -e NF_CONNTRACK -e NF_NAT -e NF_TABLES -e NF_TABLES_INET -e NF_TABLES_NETDEV
+          $S -e NFT_CHAIN_NAT_IPV4 -e NFT_CHAIN_NAT_IPV6 -e NFT_NAT -e NFT_MASQ
+          $S -e NFT_FIB_INET -e NFT_REJECT_INET -e NFT_COUNTER -e NFT_LOG
+          $S -e IP_NF_IPTABLES -e IP_NF_FILTER -e IP_NF_NAT -e IP_NF_TARGET_MASQUERADE
+          $S -e IP6_NF_IPTABLES -e IP6_NF_FILTER -e IP6_NF_NAT -e IP6_NF_TARGET_MASQUERADE
+          $S -e NET_SCHED -e NET_CLS_ACT -e NET_CLS_U32 -e NET_SCH_FQ_CODEL
+          # usb gadget (RNDIS + ECM) for early SSH
+          $S -e USB_GADGET -e USB_CONFIGFS -e USB_CONFIGFS_RNDIS -e USB_CONFIGFS_ECM
+          $S -e USB_CONFIGFS_ECM_SUBSET -e USB_CONFIGFS_F_RNDIS
+          $S -e USB_DWC3 -e USB_DWC3_QCOM -e PHY_QCOM_USB_HS -e USB_XHCI_HCD
+          $S -e USB_SUPPORT -e USB_NET_DRIVERS -e USB_NET_RNDIS_HOST -e USB_NET_CDCETHER
+          # wifi AP
+          $S -e CFG80211 -e MAC80211 -e MAC80211_MESH -e WLAN -e WLAN_VENDOR_ATH
+          $S -e WCN36XX -e WCN36XX_PLATFORM
+          $S -e QCOM_QMI_HELPERS -e QCOM_SMD_RPM -e RPMSG -e RPMSG_QCOM_SMD
+          $S -e QCOM_APCS_IPC -e QCOM_SMEM -e QCOM_SMSM
+          # remoteproc / wcnss
+          $S -e REMOTEPROC -e QCOM_RPROC_COMMON -e QCOM_WCNSS_PIL -e QCOM_WCNSS_CTRL
+          $S -e QCOM_SCM -e QCOM_RMTFS_MEM -e QCOM_PIL_INFO
+          # soc / pinctrl
+          $S -e ARCH_QCOM -e PINCTRL_QCOM -e PINCTRL_MSM -e QCOM_TSENS
+          $S -e ARM_SMMU -e QCOM_COMMAND_DB
+          # misc useful
+          $S -e KALLSYMS -e PRINTK -e IKCONFIG -e IKCONFIG_PROC
+          $S -e PSTORE -e PSTORE_RAM -e RAMOOPS -e PSTORE_CONSOLE -e PSTORE_PMSG
+          $S --set-val RAMOOPS_MEM_SIZE 0x200000
+          # trim stuff we do not need (keeps workspace + build small)
+          $S -d DRM_NOUVEAU -d DRM_I915 -d DRM_AMDGPU -d DRM_RADEON -d DRM_AST
+          $S -d SND -d SOUND -d CAN -d BT -d HAMRADIO -d DVB_CORE
+          $S -d SCSI_FC_ATTRS -d INFINIBAND -d ISDN -d WAN
+          $S -d XFS_FS -d BTRFS_FS -d NFS_FS -d CIFS -d NTFS3_FS -d GFS2_FS -d OCFS2_FS
+          $S -d TEST_KUNIT -d KUNIT -d DEBUG_INFO
+          sed -i 's/^CONFIG_DRM_NOUVEAU=.*/# CONFIG_DRM_NOUVEAU is not set/' .config || true
+          sed -i 's/^CONFIG_ACPI=y/# CONFIG_ACPI is not set/' .config || true
+
+      - name: olddefconfig
+        run: |
+          set -e
+          cd "$KDIR"
+          export PATH="/usr/lib/ccache:$PATH"
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          grep -E "^CONFIG_(WCN36XX|MAC80211|USB_CONFIGFS_RNDIS|NF_TABLES|OVERLAY_FS|SQUASHFS|RAMOOPS)=" .config || true
+
+      - name: Build kernel + dtbs + modules
+        run: |
+          set -e
+          cd "$KDIR"
+          export PATH="/usr/lib/ccache:$PATH"
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image.gz dtbs modules
+
+      - name: Stage artifacts
+        run: |
+          set -e
+          cd "$KDIR"
+          OUT="$GITHUB_WORKSPACE/out"
+          mkdir -p "$OUT"
+          export PATH="/usr/lib/ccache:$PATH"
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH="$GITHUB_WORKSPACE/modroot" modules_install
+          KREL=$(make -s ARCH=arm64 kernelrelease)
+          echo "KREL=$KREL" >> "$GITHUB_ENV"
+          # Image.gz-dtb (legacy qcom boot expects appended dtb)
+          cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/qcom/${DTB} > "$OUT/Image.gz-dtb"
+          cp arch/arm64/boot/Image.gz "$OUT/Image.gz"
+          cp arch/arm64/boot/dts/qcom/${DTB} "$OUT/${DTB}"
+          cp .config "$OUT/config-${KERNEL_TAG}"
+          # modules tarball in /lib/modules layout
+          tar -C "$GITHUB_WORKSPACE/modroot" -czf "$OUT/modules-${KREL}.tar.gz" lib
+          ls -lh "$OUT"
+
+      - name: Build initramfs (USB RNDIS early SSH)
+        run: |
+          set -e
+          OUT="$GITHUB_WORKSPACE/out"
+          mkdir -p initrd/{bin,sbin,usr/bin,usr/sbin,etc,proc,sys,dev,tmp,run,lib,lib64}
+          cp /bin/busybox initrd/bin/ 2>/dev/null || sudo apt-get install -y -qq busybox-static && cp /bin/busybox initrd/bin/
+          for a in sh ls cat mount umount ip ifconfig sleep echo mkdir mknod telnetd; do ln -sf busybox "initrd/bin/$a"; done
+          ln -sf ../bin/busybox initrd/sbin/ip
+          cp .github/init initrd/init
+          chmod +x initrd/init
+          ( cd initrd && find . | cpio -o -H newc --quiet | gzip -9 ) > "$OUT/initramfs.cpio.gz"
+          ls -lh "$OUT/initramfs.cpio.gz"
+
+      - name: Make boot.img
+        run: |
+          set -e
+          OUT="$GITHUB_WORKSPACE/out"
+          python3 tools/mkbootimg.py \
+            --kernel "$OUT/Image.gz-dtb" \
+            --ramdisk "$OUT/initramfs.cpio.gz" \
+            --cmdline "console=tty0 console=ttyMSM0,115200n8 earlycon=msm_serial.gen ramoops.mem_address=0x9ff00000 ramoops.mem_size=0x200000 ramoops.record_size=0x40000" \
+            --base 0x80000000 --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 --tags_offset 0x00000100 \
+            --pagesize 2048 --header_version 0 --output "$OUT/boot-mido.img"
+          ls -lh "$OUT/boot-mido.img"
+
+      - name: Fetch OpenWrt rootfs
+        if: ${{ inputs.upload_rootfs }}
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/out"
+          curl -sSL -o openwrt-rootfs.tar.gz "${OPENWRT_URL}"
+          ls -lh openwrt-rootfs.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mido-kernel
+          path: out/*
+          retention-days: 14
+          compression-level: 0
