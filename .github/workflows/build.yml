@@ -95,16 +95,9 @@ jobs:
           $S -e KALLSYMS -e PRINTK -e IKCONFIG -e IKCONFIG_PROC
           $S -e PSTORE -e PSTORE_RAM -e RAMOOPS -e PSTORE_CONSOLE -e PSTORE_PMSG
           $S --set-val RAMOOPS_MEM_SIZE 0x200000
-          # trim stuff we do not need (keeps workspace + build small)
-          $S -d DRM_NOUVEAU -d DRM_I915 -d DRM_AMDGPU -d DRM_RADEON -d DRM_AST
-          $S -d SND -d SOUND -d CAN -d BT -d HAMRADIO -d DVB_CORE
-          $S -d SCSI_FC_ATTRS -d INFINIBAND -d ISDN -d WAN
-          $S -d XFS_FS -d BTRFS_FS -d NFS_FS -d CIFS -d NTFS3_FS -d GFS2_FS -d OCFS2_FS
-          $S -d TEST_KUNIT -d KUNIT -d DEBUG_INFO
-          # legacy qcom boot (lk2nd + appended DTB): fixed load address, no KASLR
-          $S -d RANDOMIZE_BASE -d RELOCATABLE
+          # NOTE: do NOT trim pmOS config — earlier trims hung the kernel before console.
+          # Keep pmOS defaults intact and only ADD what OpenWrt needs.
           sed -i 's/^CONFIG_DRM_NOUVEAU=.*/# CONFIG_DRM_NOUVEAU is not set/' .config || true
-          sed -i 's/^CONFIG_ACPI=y/# CONFIG_ACPI is not set/' .config || true
 
       - name: olddefconfig
         run: |
