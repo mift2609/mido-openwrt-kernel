@@ -5,3 +5,5 @@ src/
 *.tar.gz
 *.cpio.gz
 backup/
+out-artifact/
+initrd/

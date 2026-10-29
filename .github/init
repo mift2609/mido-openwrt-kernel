@@ -72,9 +72,11 @@ done
 
 if [ -n "$NETIF" ]; then
   /bin/busybox ip link set "$NETIF" up 2>/dev/null
-  /bin/busybox ip addr add 192.168.1.1/24 dev "$NETIF" 2>/dev/null \
-    || /bin/busybox ifconfig "$NETIF" 192.168.1.1 netmask 255.255.255.0 up 2>/dev/null
-  log "net: $NETIF up -> 192.168.1.1/24"
+  # 192.168.42.1 (Android tethering range) — avoids clashing with common 192.168.1.1 routers
+  /bin/busybox ip addr add 192.168.42.1/24 dev "$NETIF" 2>/dev/null \
+    || /bin/busybox ifconfig "$NETIF" 192.168.42.1 netmask 255.255.255.0 up 2>/dev/null
+  log "net: $NETIF up -> 192.168.42.1/24"
+  /bin/busybox ip addr show "$NETIF" 2>/dev/null
 else
   log "WARN: no network interface found"
 fi
@@ -86,7 +88,7 @@ if [ -x /usr/sbin/dropbear ] && [ -f /etc/dropbear/dropbear_rsa_host_key ]; then
     && log "dropbear :22 up"
 fi
 
-log "READY: telnet 192.168.1.1:23 | ssh 192.168.1.1:22"
+log "READY: telnet 192.168.42.1:23 | ssh 192.168.42.1:22"
 
 # keep PID 1 alive, heartbeat to kmsg so we can see liveness from host
 n=0
