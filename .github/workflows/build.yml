@@ -142,14 +142,19 @@ jobs:
         run: |
           set -e
           OUT="$GITHUB_WORKSPACE/out"
-          mkdir -p initrd/{bin,sbin,usr/bin,usr/sbin,etc,proc,sys,dev,tmp,run,lib,lib64}
-          cp /bin/busybox initrd/bin/ 2>/dev/null || sudo apt-get install -y -qq busybox-static && cp /bin/busybox initrd/bin/
-          for a in sh ls cat mount umount ip ifconfig sleep echo mkdir mknod telnetd; do ln -sf busybox "initrd/bin/$a"; done
+          # NOTE: do NOT ship host (x86_64) dropbear into an arm64 initramfs.
+          # initramfs provides telnetd only; real dropbear comes from the OpenWrt rootfs.
+          sudo apt-get install -y -qq --no-install-recommends busybox-static
+          mkdir -p initrd/{bin,sbin,usr/bin,usr/sbin,etc,proc,sys,dev,tmp,run,lib}
+          cp /bin/busybox initrd/bin/busybox
+          for a in sh ls cat mount umount ip ifconfig sleep echo mkdir mknod telnetd \
+                   cut head tail grep ps kill; do ln -sf busybox "initrd/bin/$a"; done
           ln -sf ../bin/busybox initrd/sbin/ip
           cp .github/init initrd/init
-          chmod +x initrd/init
+          chmod +x initrd/init initrd/bin/busybox
           ( cd initrd && find . | cpio -o -H newc --quiet | gzip -9 ) > "$OUT/initramfs.cpio.gz"
           ls -lh "$OUT/initramfs.cpio.gz"
+          file initrd/bin/busybox
 
       - name: Make boot.img
         run: |

@@ -28,7 +28,10 @@ import os
 import re
 import tempfile
 
-from gki.generate_gki_certificate import generate_gki_certificate
+try:
+    from gki.generate_gki_certificate import generate_gki_certificate
+except ImportError:  # GKI certs only needed for header v4 + boot signature
+    generate_gki_certificate = None
 
 # Constant and structure definition is in
 # system/tools/mkbootimg/include/bootimg/bootimg.h
