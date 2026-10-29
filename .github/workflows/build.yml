@@ -101,6 +101,8 @@ jobs:
           $S -d SCSI_FC_ATTRS -d INFINIBAND -d ISDN -d WAN
           $S -d XFS_FS -d BTRFS_FS -d NFS_FS -d CIFS -d NTFS3_FS -d GFS2_FS -d OCFS2_FS
           $S -d TEST_KUNIT -d KUNIT -d DEBUG_INFO
+          # legacy qcom boot (lk2nd + appended DTB): fixed load address, no KASLR
+          $S -d RANDOMIZE_BASE -d RELOCATABLE
           sed -i 's/^CONFIG_DRM_NOUVEAU=.*/# CONFIG_DRM_NOUVEAU is not set/' .config || true
           sed -i 's/^CONFIG_ACPI=y/# CONFIG_ACPI is not set/' .config || true
 
