@@ -52,11 +52,26 @@ if [ -d /sys/kernel/config ] && /bin/busybox mkdir -p "$G" 2>/dev/null; then
   echo "12:00:00:00:00:01" > functions/rndis.usb0/dev_addr  2>/dev/null
   echo "12:00:00:00:00:02" > functions/rndis.usb0/host_addr 2>/dev/null
   /bin/busybox ln -sf functions/rndis.usb0 configs/c.1/ 2>/dev/null
-  UDC=$(/bin/busybox ls /sys/class/udc 2>/dev/null | head -n1)
+  # UDC can take a while to appear (dwc3 probe); wait up to ~15s, then bind with retries
+  i=0
+  UDC=""
+  while [ $i -lt 75 ]; do
+    UDC=$(/bin/busybox ls /sys/class/udc 2>/dev/null | head -n1)
+    [ -n "$UDC" ] && break
+    i=$((i+1)); /bin/busybox sleep 0.2
+  done
   if [ -n "$UDC" ]; then
-    echo "$UDC" > UDC 2>/dev/null && log "gadget bound: $UDC"
+    n=0
+    while [ $n -lt 3 ]; do
+      if echo "$UDC" > UDC 2>/dev/null; then
+        log "gadget bound: $UDC (try $((n+1)))"
+        break
+      fi
+      n=$((n+1)); /bin/busybox sleep 1
+    done
+    [ $n -ge 3 ] && log "WARN: UDC bind failed 3x"
   else
-    log "WARN: no UDC yet"
+    log "WARN: no UDC after 15s"
   fi
   cd /
 else
