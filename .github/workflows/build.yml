@@ -50,6 +50,18 @@ jobs:
           echo "KDIR=$PWD/src" >> "$GITHUB_ENV"
           ls "$PWD/src/arch/arm64/boot/dts/qcom/${DTB%%-*}-xiaomi-mido.dts"
 
+      # wcn36xx mode AP: config_bss dipanggil dengan sta == NULL sehingga bss_params->ht
+      # tetap 0 -> firmware menganggap BSS non-HT dan TX AP->klien terkunci di rate legacy
+      # (terukur ~6,9 Mbit/s). Tambalan mengisi HT params dari kapabilitas phy.
+      - name: Patch wcn36xx (HT untuk BSS mode AP)
+        run: |
+          set -e
+          cd "$KDIR"
+          python3 "$GITHUB_WORKSPACE/patches/wcn36xx-ap-ht.py"
+          grep -q "wcn36xx_smd_set_bss_ht_params(wcn, vif, sta, bss);" \
+            drivers/net/wireless/ath/wcn36xx/smd.c
+          echo "tambalan wcn36xx terpasang dan terverifikasi"
+
       - name: Fetch pmOS msm8953 config
         run: |
           set -e
