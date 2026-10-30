@@ -48,3 +48,29 @@ ssh root@192.168.42.1             # password: toor
    `/etc/passwd`** (bukan hanya `/etc/shadow`) → autentikasi password baru berhasil.
 3. **procd ujail tidak jalan di initramfs** (`pivot_root: Invalid argument`) → dnsmasq crash-loop.
    Perbaikan: `_procd_add_jail()` → `return 0` di `lib/functions/procd.sh`.
+
+## WiFi AP (WCNSS / wcn36xx) — status: phy hidup, AP belum tuntas
+
+Urutan muat modul (wajib, kalau tidak banyak "Unknown symbol"):
+```
+libarc4 rfkill cfg80211 mac80211 qrtr qrtr-smd mdt_loader qcom_common \
+qcom_pil_info qmi_helpers qcom_sysmon qcom_wcnss_pil wcn36xx
+```
+**`qrtr` + `qrtr-smd` wajib** meski `depmod` tidak menyebutnya: `qcom_sysmon` memanggil
+`qmi_handle_init()` → `sock_create_kern(AF_QIPCRTR)`. Tanpa itu: `failed to initialize qmi handle`
+dan remoteproc langsung di-release.
+
+Firmware (dari backup `persist`/`modem` HP):
+- `/lib/firmware/wcnss.mdt` + `wcnss.b00…b12`
+- `/lib/firmware/wlan/prima/{WCNSS_qcom_wlan_nv.bin,WCNSS_cfg.dat,WCNSS_wlan_dictionary.dat}`
+- `/lib/firmware/regulatory.db` (paket OpenWrt `wireless-regdb`)
+
+Terbukti: `remoteproc0: Booting fw image wcnss.mdt` → `is now up` → `wcn36xx` bind →
+**`/sys/class/ieee80211/phy0` muncul**.
+
+Skrip: `overlay/scripts/fetch-openwrt-wifi-pkgs.sh` (ambil hostapd-basic/wifi-scripts/iw/iwinfo/regdb),
+`overlay/scripts/collect-wifi-modules.py` (closure modul + firmware ke staging),
+`overlay/etc/init.d/mido-wifi` (muat modul → tunggu phy0 → `wifi config` → AP `mido-hotspot`).
+
+Catatan boot: image besar bikin boot lambat (~50–60 s sampai layanan). Buang `.ko.gz` yang tak dipakai
+(45 MB → 20 MB). Layar HP tetap gelap — itu normal, jangan dipakai sebagai indikator.
