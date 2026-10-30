@@ -1,118 +1,124 @@
 #!/bin/busybox sh
-# mido (Redmi Note 4 / MSM8953) early-initramfs
-# Goal: USB RNDIS up at 192.168.1.1 + telnet + dropbear, survive everything.
+# mido (Redmi Note 4 / MSM8953) early-initramfs v4
+# Goal: USB RNDIS up at 192.168.42.1 + telnet + HTTP debug channel, survive everything.
 # HARD RULE: never `exec >/dev/...` — a missing console kills init before USB.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+BB=/bin/busybox
+DBG=/tmp/dbg.txt
 
-/bin/busybox mount -t proc proc /proc 2>/dev/null
-/bin/busybox mount -t sysfs sysfs /sys 2>/dev/null
-/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
-[ -e /dev/console ] || /bin/busybox mknod /dev/console c 5 1 2>/dev/null
-/bin/busybox mount -t tmpfs tmpfs /tmp 2>/dev/null
-/bin/busybox mount -t tmpfs tmpfs /run 2>/dev/null
-# telnetd/ssh need PTYs
-/bin/busybox mkdir -p /dev/pts 2>/dev/null
-/bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null
-[ -e /dev/ptmx ] || /bin/busybox mknod /dev/ptmx c 5 2 2>/dev/null
+$BB mount -t proc proc /proc 2>/dev/null
+$BB mount -t sysfs sysfs /sys 2>/dev/null
+$BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
+[ -e /dev/console ] || $BB mknod /dev/console c 5 1 2>/dev/null
+$BB mount -t tmpfs tmpfs /tmp 2>/dev/null
+$BB mount -t tmpfs tmpfs /run 2>/dev/null
+# telnetd needs PTYs
+$BB mkdir -p /dev/pts 2>/dev/null
+$BB mount -t devpts devpts /dev/pts 2>/dev/null
+[ -e /dev/ptmx ] || $BB mknod /dev/ptmx c 5 2 2>/dev/null
 
-# echo to every available sink, ignore failures
+: > $DBG
 log() {
-  echo "$*"
+  echo "$*" >> $DBG
   echo "$*" > /dev/kmsg 2>/dev/null
-  [ -w /dev/console ] && echo "$*" > /dev/console 2>/dev/null
   return 0
 }
 
-log "mido-initramfs: start"
+log "=== mido initramfs v4 ==="
+log "uname: $($BB uname -a 2>/dev/null)"
+log "devpts: $($BB grep devpts /proc/mounts 2>/dev/null)"
+log "ptmx: $($BB ls -l /dev/ptmx 2>/dev/null)"
 
-# --- previous-crash dump (ramoops) ---
+# previous-crash dump (ramoops)
 if [ -r /sys/fs/pstore/console-ramoops-0 ]; then
-  log "=== PSTORE (previous boot) ==="
-  tail -c 4000 /sys/fs/pstore/console-ramoops-0 2>/dev/null
+  log "=== PSTORE PREV BOOT ==="
+  $BB tail -c 3000 /sys/fs/pstore/console-ramoops-0 >> $DBG 2>/dev/null
   log "=== END PSTORE ==="
 fi
 
-# --- USB gadget: RNDIS first, before anything slow ---
-/bin/busybox mount -t configfs none /sys/kernel/config 2>/dev/null
+# --- USB gadget: RNDIS first ---
+$BB mount -t configfs none /sys/kernel/config 2>/dev/null
 G=/sys/kernel/config/usb_gadget/mido
-if [ -d /sys/kernel/config ] && /bin/busybox mkdir -p "$G" 2>/dev/null; then
+if [ -d /sys/kernel/config ] && $BB mkdir -p "$G" 2>/dev/null; then
   cd "$G" || cd /
   echo 0x1d6b > idVendor   2>/dev/null
   echo 0x2742 > idProduct  2>/dev/null
   echo 0x0100 > bcdDevice  2>/dev/null
   echo 0x0200 > bcdUSB     2>/dev/null
-  /bin/busybox mkdir -p strings/0x409 2>/dev/null
-  echo "mido0001"            > strings/0x409/serialnumber 2>/dev/null
-  echo "Xiaomi"              > strings/0x409/manufacturer 2>/dev/null
-  echo "Redmi Note 4 OpenWrt" > strings/0x409/product    2>/dev/null
-  /bin/busybox mkdir -p configs/c.1/strings/0x409 2>/dev/null
-  echo "RNDIS"  > configs/c.1/strings/0x409/configuration 2>/dev/null
-  echo 500      > configs/c.1/MaxPower 2>/dev/null
-  /bin/busybox mkdir -p functions/rndis.usb0 2>/dev/null
+  $BB mkdir -p strings/0x409 2>/dev/null
+  echo "mido0001"             > strings/0x409/serialnumber 2>/dev/null
+  echo "Xiaomi"               > strings/0x409/manufacturer 2>/dev/null
+  echo "Redmi Note 4 OpenWrt" > strings/0x409/product      2>/dev/null
+  $BB mkdir -p configs/c.1/strings/0x409 2>/dev/null
+  echo "RNDIS" > configs/c.1/strings/0x409/configuration 2>/dev/null
+  echo 500     > configs/c.1/MaxPower 2>/dev/null
+  $BB mkdir -p functions/rndis.usb0 2>/dev/null
   echo "12:00:00:00:00:01" > functions/rndis.usb0/dev_addr  2>/dev/null
   echo "12:00:00:00:00:02" > functions/rndis.usb0/host_addr 2>/dev/null
-  /bin/busybox ln -sf functions/rndis.usb0 configs/c.1/ 2>/dev/null
-  # UDC can take a while to appear (dwc3 probe); wait up to ~15s, then bind with retries
-  i=0
-  UDC=""
-  while [ $i -lt 75 ]; do
-    UDC=$(/bin/busybox ls /sys/class/udc 2>/dev/null | head -n1)
+  $BB ln -sf functions/rndis.usb0 configs/c.1/ 2>/dev/null
+
+  # UDC can take a while to appear (dwc3 probe)
+  i=0; UDC=""
+  while [ $i -lt 100 ]; do
+    UDC=$($BB ls /sys/class/udc 2>/dev/null | head -n1)
     [ -n "$UDC" ] && break
-    i=$((i+1)); /bin/busybox sleep 0.2
+    i=$((i+1)); $BB sleep 0.2
   done
+  log "udc: '${UDC}' after ${i} polls; avail=$($BB ls /sys/class/udc 2>/dev/null | tr '\n' ' ')"
   if [ -n "$UDC" ]; then
     n=0
-    while [ $n -lt 3 ]; do
-      if echo "$UDC" > UDC 2>/dev/null; then
-        log "gadget bound: $UDC (try $((n+1)))"
-        break
-      fi
-      n=$((n+1)); /bin/busybox sleep 1
+    while [ $n -lt 10 ]; do
+      echo "$UDC" > UDC 2>/dev/null && { log "gadget bound (try $((n+1)))"; break; }
+      n=$((n+1)); $BB sleep 1
     done
-    [ $n -ge 3 ] && log "WARN: UDC bind failed 3x"
-  else
-    log "WARN: no UDC after 15s"
+    [ $n -ge 10 ] && log "ERROR: UDC bind failed 10x"
   fi
   cd /
 else
-  log "WARN: configfs/usb_gadget unavailable"
+  log "ERROR: configfs/usb_gadget unavailable"
 fi
 
 # --- network config ---
-NETIF=""
-i=0
-while [ $i -lt 60 ]; do
-  for c in usb0 rndis0 eth0; do
+NETIF=""; i=0
+while [ $i -lt 100 ]; do
+  for c in usb0 rndis0 usb1 eth0; do
     [ -e "/sys/class/net/$c" ] && NETIF="$c" && break
   done
   [ -n "$NETIF" ] && break
-  i=$((i+1)); /bin/busybox sleep 0.2
+  i=$((i+1)); $BB sleep 0.2
 done
-
+log "netif: '${NETIF}' after ${i}; all=$($BB ls /sys/class/net 2>/dev/null | tr '\n' ' ')"
 if [ -n "$NETIF" ]; then
-  /bin/busybox ip link set "$NETIF" up 2>/dev/null
-  # 192.168.42.1 (Android tethering range) — avoids clashing with common 192.168.1.1 routers
-  /bin/busybox ip addr add 192.168.42.1/24 dev "$NETIF" 2>/dev/null \
-    || /bin/busybox ifconfig "$NETIF" 192.168.42.1 netmask 255.255.255.0 up 2>/dev/null
-  log "net: $NETIF up -> 192.168.42.1/24"
-  /bin/busybox ip addr show "$NETIF" 2>/dev/null
-else
-  log "WARN: no network interface found"
+  $BB ip link set "$NETIF" up 2>/dev/null
+  $BB ip addr add 192.168.42.1/24 dev "$NETIF" 2>/dev/null \
+    || $BB ifconfig "$NETIF" 192.168.42.1 netmask 255.255.255.0 up 2>/dev/null
+  log "ipaddr: $($BB ip addr show "$NETIF" 2>/dev/null | $BB grep 'inet ')"
 fi
 
-# --- services ---
-/bin/busybox telnetd -p 23 -l /bin/sh 2>/dev/null && log "telnetd :23 up"
-if [ -x /usr/sbin/dropbear ] && [ -f /etc/dropbear/dropbear_rsa_host_key ]; then
-  /usr/sbin/dropbear -R -B -p 22 -r /etc/dropbear/dropbear_rsa_host_key 2>/dev/null \
-    && log "dropbear :22 up"
-fi
+# --- services (busybox telnetd/httpd absent in Alpine-static; use tinynet) ---
+/bin/tinynet > /tmp/shell.err 2>&1 &
+SH_PID=$!
+sleep 0.5
+log "shell:23 pid=$SH_PID alive=$($BB kill -0 $SH_PID 2>/dev/null && echo 1 || echo 0)"
+log "shell err: $($BB cat /tmp/shell.err 2>/dev/null | $BB tail -2 | $BB tr '\n' ' ')"
 
-log "READY: telnet 192.168.42.1:23 | ssh 192.168.42.1:22"
+/bin/tinynet http > /tmp/http.err 2>&1 &
+H_PID=$!
+sleep 0.5
+log "http:8080 pid=$H_PID alive=$($BB kill -0 $H_PID 2>/dev/null && echo 1 || echo 0)"
+log "http err: $($BB cat /tmp/http.err 2>/dev/null | $BB tail -2 | $BB tr '\n' ' ')"
+$BB sleep 1
+log "listen: $($BB netstat -ltn 2>/dev/null | $BB tail -n +3 | $BB tr -s ' ' | $BB cut -d' ' -f4 | $BB tr '\n' ' ')"
+log "=== READY: http://192.168.42.1:8080/dbg.txt | telnet 192.168.42.1:23 ==="
 
-# keep PID 1 alive, heartbeat to kmsg so we can see liveness from host
+# keep PID 1 alive; retry telnetd if it died
 n=0
 while :; do
-  /bin/busybox sleep 30
+  $BB sleep 20
   n=$((n+1))
-  echo "mido heartbeat ${n} uptime=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)s" > /dev/kmsg 2>/dev/null
+  if $BB netstat -ltn 2>/dev/null | $BB grep -q ':23 '; then :; else
+    /bin/tinynet > /tmp/shell.err 2>&1 &
+    log "retry shell:23 pid=$! err=$($BB tail -1 /tmp/shell.err 2>/dev/null)"
+  fi
+  echo "mido heartbeat $n" > /dev/kmsg 2>/dev/null
 done
