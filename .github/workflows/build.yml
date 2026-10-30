@@ -66,6 +66,8 @@ jobs:
           # filesystems
           $S -e SQUASHFS -e SQUASHFS_XZ -e SQUASHFS_LZO -e SQUASHFS_LZ4 -e SQUASHFS_ZSTD
           $S -e OVERLAY_FS -e EXT4_FS -e EXT4_FS_POSIX_ACL -e F2FS_FS
+          # quota: ext4 userdata Android memakai fitur `quota`; tanpa ini mount RW gagal EINVAL
+          $S -e QUOTA -e QUOTACTL -e QUOTA_TREE -e QFMT_V2 -e QUOTA_NETLINK_INTERFACE
           $S -e TMPFS -e DEVTMPFS -e DEVTMPFS_MOUNT -e PROC_FS -e SYSFS
           # net core
           $S -e BRIDGE -e VETH -e TUN -e NETFILTER -e NETFILTER_ADVANCED
