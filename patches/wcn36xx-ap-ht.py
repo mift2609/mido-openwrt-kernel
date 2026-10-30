@@ -22,7 +22,7 @@ NEW_FUNC = r'''static void wcn36xx_smd_set_bss_ht_params(struct wcn36xx *wcn,
 					  struct ieee80211_sta *sta,
 					  struct wcn36xx_hal_config_bss_params *bss_params)
 {
-	const struct ieee80211_ht_cap *ht_cap = NULL;
+	const struct ieee80211_sta_ht_cap *ht_cap = NULL;
 	struct ieee80211_supported_band *band;
 	unsigned long caps;
 
@@ -36,9 +36,9 @@ NEW_FUNC = r'''static void wcn36xx_smd_set_bss_ht_params(struct wcn36xx *wcn,
 		 * bss_params->ht tetap 0, firmware menganggap BSS non-HT, dan TX
 		 * AP->klien terkunci di rate legacy (terukur ~6 Mbit/s).
 		 */
-		if (vif->bss_conf.chandef.chan &&
-		    vif->bss_conf.chandef.width != NL80211_CHAN_WIDTH_20_NOHT) {
-			band = wcn->hw->wiphy->bands[vif->bss_conf.chandef.chan->band];
+		if (vif->bss_conf.chanreq.oper.chan &&
+		    vif->bss_conf.chanreq.oper.width != NL80211_CHAN_WIDTH_20_NOHT) {
+			band = wcn->hw->wiphy->bands[vif->bss_conf.chanreq.oper.chan->band];
 			if (band && band->ht_cap.ht_supported)
 				ht_cap = &band->ht_cap;
 		}
@@ -50,7 +50,7 @@ NEW_FUNC = r'''static void wcn36xx_smd_set_bss_ht_params(struct wcn36xx *wcn,
 	caps = ht_cap->cap;
 	bss_params->ht = 1;
 	bss_params->tx_channel_width_set =
-		(vif->bss_conf.chandef.width == NL80211_CHAN_WIDTH_40);
+		(vif->bss_conf.chanreq.oper.width == NL80211_CHAN_WIDTH_40);
 	bss_params->lsig_tx_op_protection_full_support =
 		is_cap_supported(caps, IEEE80211_HT_CAP_LSIG_TXOP_PROT);
 
