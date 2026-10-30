@@ -95,3 +95,28 @@ ping 0% loss, SSH lewat WiFi berhasil (`ssh root@192.168.43.1`).
 
 `wifi up` bawaan OpenWrt 24.10 (integrasi netifd+ubus, interface `phy0-ap0`) gagal di setup ini
 (`ubus wait_for hostapd` menggantung, device `phy0-ap0` tak dibuat) — karena itu hostapd dijalankan manual.
+
+## Persistensi config (permanen)
+
+Config disimpan di partisi **`cache` (mmcblk0p25, ext4)** dan di-bind ke `/etc` + `/root` oleh `/init`:
+
+```
+mount -t ext4 -o noatime,rw /dev/mmcblk0p25 /data
+[ -d /data/mido/etc ] || cp -a /etc/. /data/mido/etc     # seed sekali
+mount -o bind /data/mido/etc  /etc
+mount -o bind /data/mido/root /root
+```
+
+Terverifikasi: `uci set system...hostname='mido-ap'` + ubah SSID → **reboot → setting tetap ada**.
+
+Jebakan yang ditemukan:
+1. **`userdata` (p49) TIDAK bisa dipakai**: ext4-nya berfitur `quota`, kernel tanpa `CONFIG_QUOTA`/`QFMT_V2`
+   → `mount` gagal `EINVAL` (log: *"The kernel was not built with CONFIG_QUOTA and CONFIG_QFMT_V2"*).
+   Bisa dipakai `ro,noload` saja (tidak berguna untuk tulis). Partisi `cache` ext4 polos → RW OK.
+   (`cust` p48 dan `system` p24 juga RW OK bila cache tak tersedia.)
+2. **Race device node**: saat `/init` jalan, `/dev/mmcblk0p25` bisa belum ada (MMC probe asinkron) →
+   wajib tunggu (`while [ ! -b ... ]; do sleep 1; done`). Kalau tidak, boot kadang tanpa persistensi.
+3. Jangan `mount` device node pakai `sleep 0.5` — busybox OpenWrt tak mendukung pecahan detik.
+
+Yang persisten: `/etc` (uci, shadow/password, hostapd conf, dropbear host key) dan `/root` (authorized_keys).
+Yang **tidak** persisten: paket yang di-`opkg install` (rootfs tetap di RAM) — perlu overlay penuh bila diinginkan.

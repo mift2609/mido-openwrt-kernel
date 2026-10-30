@@ -8,4 +8,37 @@ mount -t devpts devpts /dev/pts 2>/dev/null
 mount -t tmpfs tmpfs /tmp 2>/dev/null
 mount -t tmpfs tmpfs /run 2>/dev/null
 export INITRAMFS=1
+
+# --- PERSISTENSI: /etc dan /root di partisi `cache` (p25, ext4 tanpa quota) ---
+# userdata (p49) tidak bisa dipakai: ext4-nya berfitur `quota`, kernel tanpa CONFIG_QUOTA -> EINVAL.
+# Tanpa ini semua perubahan config hilang saat HP dimatikan (rootfs = RAM).
+PDATA=""
+# tunggu device node (MMC probe asinkron) — maks 20s
+i=0
+while [ $i -lt 20 ]; do
+	[ -b /dev/mmcblk0p25 ] && break
+	i=$((i+1)); sleep 1
+done
+mkdir -p /data 2>/dev/null
+for cand in /dev/mmcblk0p25 /dev/mmcblk0p48; do
+	[ -b "$cand" ] || continue
+	if mount -t ext4 -o noatime,rw "$cand" /data 2>/dev/null; then PDATA="$cand"; break; fi
+done
+echo "mido: persist dev=$PDATA (tunggu ${i}s)" >/dev/kmsg
+if [ -n "$PDATA" ]; then
+	D=/data/mido
+	mkdir -p "$D" 2>/dev/null
+	if [ ! -d "$D/etc" ]; then
+		mkdir -p "$D/etc" 2>/dev/null
+		cp -a /etc/. "$D/etc/" 2>/dev/null
+		echo "mido: seed /etc -> $D/etc" >/dev/kmsg
+	fi
+	if [ ! -d "$D/root" ]; then
+		mkdir -p "$D/root" 2>/dev/null
+		cp -a /root/. "$D/root/" 2>/dev/null
+	fi
+	mount -o bind "$D/etc"  /etc 2>/dev/null && echo "mido: bind /etc OK ($PDATA)" >/dev/kmsg
+	mount -o bind "$D/root" /root 2>/dev/null && echo "mido: bind /root OK" >/dev/kmsg
+fi
+
 exec /sbin/init
