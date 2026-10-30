@@ -1,53 +1,44 @@
 #!/bin/sh /etc/rc.common
-# mido WiFi AP: muat modul wcn36xx + firmware WCNSS, lalu nyalakan AP mode
+# mido WiFi AP (manual hostapd) — modul wcn36xx + qrtr, AP 2.4GHz di subnet 192.168.43.x
 START=94
 
 MODS="libarc4 rfkill cfg80211 mac80211 qrtr qrtr-smd mdt_loader qcom_common qcom_pil_info qmi_helpers qcom_sysmon qcom_wcnss_pil wcn36xx"
 
-start() {
-	exec >>/tmp/wifi.log 2>&1
-	echo "=== mido-wifi $(date) ==="
-	KREL=$(uname -r)
-	MDIR=/lib/modules/$KREL
+log() { logger -t mido-wifi "$*"; echo "$*" >>/tmp/wifi.log; }
 
+start() {
+	echo "=== mido-wifi $(date) ===" >>/tmp/wifi.log
+	KREL=$(uname -r); MDIR=/lib/modules/$KREL
 	for m in $MODS; do
 		ko=$(find "$MDIR" -name "$m.ko" | head -1)
-		[ -n "$ko" ] || { logger -t mido-wifi "modul $m tidak ada"; continue; }
-		/sbin/insmod "$ko" 2>&1 | logger -t mido-wifi
+		[ -n "$ko" ] || { log "modul $m tidak ada"; continue; }
+		/sbin/insmod "$ko" 2>&1 | while read l; do log "insmod $m: $l"; done
 	done
 
-	# tunggu phy muncul (remoteproc + firmware load async)
 	i=0
-	while [ $i -lt 60 ]; do
+	while [ $i -lt 90 ]; do
 		[ -e /sys/class/ieee80211/phy0 ] && break
-		i=$((i+1)); sleep 0.5
+		i=$((i+1)); sleep 1
 	done
-	if [ ! -e /sys/class/ieee80211/phy0 ]; then
-		logger -t mido-wifi "phy0 tidak muncul (modul/firmware gagal)"
-		return 0
-	fi
-	logger -t mido-wifi "phy0 muncul, phy: $(cat /sys/class/ieee80211/phy0/device/uevent 2>/dev/null | tr '\n' ' ')"
+	[ -e /sys/class/ieee80211/phy0 ] || { log "phy0 TIDAK muncul (${i}s)"; return 0; }
+	log "phy0 muncul setelah ${i}s"
 
-	# konfigurasi AP lewat uci
-	if ! uci -q get wireless.radio0 >/dev/null 2>&1; then
-		wifi config 2>/dev/null
-	fi
-	if uci -q get wireless.radio0 >/dev/null 2>&1; then
-		uci -q set wireless.radio0.disabled='0'
-		uci -q set wireless.radio0.channel='6'
-		uci -q set wireless.radio0.band='2g'
-		uci -q set wireless.radio0.htmode='HT20'
-		if ! uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1; then
-			uci add wireless wifi-iface >/dev/null
-		fi
-		uci -q set wireless.@wifi-iface[0].device='radio0'
-		uci -q set wireless.@wifi-iface[0].network='usb'
-		uci -q set wireless.@wifi-iface[0].mode='ap'
-		uci -q set wireless.@wifi-iface[0].ssid='mido-hotspot'
-		uci -q set wireless.@wifi-iface[0].encryption='none'
-		uci -q commit wireless
-		wifi up 2>&1 | logger -t mido-wifi
-		sleep 3
-		ip -4 addr show 2>/dev/null | grep -E "wlan|br-" | logger -t mido-wifi
-	fi
+	# AP interface
+	[ -e /sys/class/net/wlan0 ] || iw phy phy0 interface add wlan0 type __ap 2>&1 | while read l; do log "iw add: $l"; done
+	case "$(cat /sys/class/net/wlan0/address 2>/dev/null)" in
+		00:00:00:00:00:00|"") ip link set wlan0 address 12:00:00:00:00:0a;;
+	esac
+	ip link set wlan0 up
+
+	killall hostapd 2>/dev/null
+	/usr/sbin/hostapd /etc/hostapd-mido.conf >/tmp/hapd.log 2>&1 &
+	sleep 5
+	log "iw: $(iw dev 2>/dev/null | grep -E 'ssid|type|channel' | tr '\n' ' ')"
+	log "hostapd log: $(cat /tmp/hapd.log 2>/dev/null | tail -3 | tr '\n' '|')"
+
+	# IP + DHCP untuk wlan0
+	ip addr add 192.168.43.1/24 dev wlan0 2>/dev/null
+	sleep 1
+	/etc/init.d/dnsmasq reload >/dev/null 2>&1
+	log "addr: $(ip -4 addr show wlan0 2>/dev/null | grep inet | tr -s ' ')"
 }

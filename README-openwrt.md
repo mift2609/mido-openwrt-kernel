@@ -49,7 +49,7 @@ ssh root@192.168.42.1             # password: toor
 3. **procd ujail tidak jalan di initramfs** (`pivot_root: Invalid argument`) → dnsmasq crash-loop.
    Perbaikan: `_procd_add_jail()` → `return 0` di `lib/functions/procd.sh`.
 
-## WiFi AP (WCNSS / wcn36xx) — status: phy hidup, AP belum tuntas
+## WiFi AP (WCNSS / wcn36xx) — status: **JADI, terverifikasi**
 
 Urutan muat modul (wajib, kalau tidak banyak "Unknown symbol"):
 ```
@@ -74,3 +74,24 @@ Skrip: `overlay/scripts/fetch-openwrt-wifi-pkgs.sh` (ambil hostapd-basic/wifi-sc
 
 Catatan boot: image besar bikin boot lambat (~50–60 s sampai layanan). Buang `.ko.gz` yang tak dipakai
 (45 MB → 20 MB). Layar HP tetap gelap — itu normal, jangan dipakai sebagai indikator.
+
+### WiFi AP — resep final yang terbukti
+
+Topologi: **dua subnet terpisah** (JANGAN bridge, lihat catatan bawah)
+- USB RNDIS : `usb0` 192.168.42.1/24, DHCP 100–200
+- WiFi AP  : `wlan0` 192.168.43.1/24, DHCP 100–200, SSID `mido-hotspot` (WPA2, psk `midohotspot`), ch 6
+
+`overlay/etc/init.d/mido-wifi` (START=94) melakukan:
+1. Muat modul berurutan (qrtr wajib) → tunggu `/sys/class/ieee80211/phy0` (maks 90s).
+2. `iw phy phy0 interface add wlan0 type __ap` + set MAC (`12:00:00:00:00:0a`, karena MAC bawaan nol).
+3. Jalankan `hostapd /etc/hostapd-mido.conf` **langsung** (jangan lewat integrasi wifi-scripts/netifd).
+4. `ip addr add 192.168.43.1/24 dev wlan0` lalu `/etc/init.d/dnsmasq reload`.
+
+Hasil terverifikasi: hostapd `AP-ENABLED`, laptop **connect ke `mido-hotspot` dan dapat lease 192.168.43.137**,
+ping 0% loss, SSH lewat WiFi berhasil (`ssh root@192.168.43.1`).
+
+**Jangan bridge `usb0` ke bridge Linux** — RNDIS di dalam bridge langsung memutus koneksi USB
+(percobaan `br-hotspot` membuat device tak terjangkau). Pakai dua subnet seperti di atas.
+
+`wifi up` bawaan OpenWrt 24.10 (integrasi netifd+ubus, interface `phy0-ap0`) gagal di setup ini
+(`ubus wait_for hostapd` menggantung, device `phy0-ap0` tak dibuat) — karena itu hostapd dijalankan manual.

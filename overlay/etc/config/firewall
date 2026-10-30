@@ -3,17 +3,13 @@ config defaults
 	option input 'ACCEPT'
 	option output 'ACCEPT'
 	option forward 'ACCEPT'
-	option fullcone 'enable'
 
 config zone
-	option name 'usb'
+	option name 'hotspot'
 	option input 'ACCEPT'
 	option output 'ACCEPT'
 	option forward 'ACCEPT'
 	option masq '1'
 	option mtu_fix '1'
 	list network 'usb'
-
-config forwarding
-	option src 'usb'
-	option dest 'usb'
+	list network 'wifi'
